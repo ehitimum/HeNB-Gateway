@@ -12,6 +12,9 @@
 #include "InitiatingMessage.h"
 #include "asn_application.h"
 #include "asn_codecs.h"
+#include "Global-ENB-ID.h"
+#include "ProtocolIE-Field.h"
+#include "S1SetupRequest.h"
 
 
 #define CLIENT_PORT 36412      // Port for clients to connect
@@ -23,6 +26,8 @@
 int mme_fd;  // Global MME connection (shared by threads, can be thread-safe with mutex)
 pthread_mutex_t mme_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+const char NEW_ENB_ID[] = {0x00, 0x12, 0x34};
+
 typedef struct
 {
     int client_fd;
@@ -30,32 +35,71 @@ typedef struct
 }client_data_t;
 
 
-void decode_s1ap_message(const char *buffer, int length, char *output_buffer){
+int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size){
     S1AP_PDU_t *pdu = NULL;
     asn_dec_rval_t rval;
 
     //Decode S1AP PDU
-    rval = asn_decode(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, (void **)&pdu, buffer, length);
+    rval = asn_decode(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, (void **)&pdu, input, input_size);
     if (rval.code != RC_OK)
     {
         snprintf(output_buffer, BUFFER_SIZE, "Failed to decode S1AP message.");\
         return;
     }
 
-    printf("Decoded S1AP Message:\n");
-    // Print the decoded structure in XML format for better understanding
-    asn_fprint(stdout, &asn_DEF_S1AP_PDU, pdu);
+    // printf("Decoded S1AP Message:\n");
+    // // Print the decoded structure in XML format for better understanding
+    // asn_fprint(stdout, &asn_DEF_S1AP_PDU, pdu);
 
-    if (pdu->present == S1AP_PDU_PR_initiatingMessage)
-    {
-        snprintf(output_buffer, BUFFER_SIZE, "Decoded S1AP Initiating Message, size: %d bytes", length);
-    } else {
-        snprintf(output_buffer, BUFFER_SIZE, "Unsupported S1AP message type.");
+     // Check if the message is an InitiatingMessage
+    if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
+        InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
+        if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
+            S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
+
+            // Call the separate function to replace eNB-ID
+            replace_enb_id(setupRequest, output_buffer, output_size);
+        }
     }
 
+    asn_enc_rval_t enc_rval;
+    enc_rval = asn_encode_to_buffer(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, pdu, output_buffer, output_size);
+    if (enc_rval.encoded < 0) {
+        snprintf(output_buffer, output_size, "Failed to encode modified S1AP message.");
+        return -1;
+    }
+
+    // if (pdu->present == S1AP_PDU_PR_initiatingMessage)
+    // {
+    //     snprintf(output_buffer, BUFFER_SIZE, "Decoded S1AP Initiating Message, size: %d bytes", length);
+    // } else {
+    //     snprintf(output_buffer, BUFFER_SIZE, "Unsupported S1AP message type.");
+    // }
+
     ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+    return enc_rval.encoded;
     
     
+}
+
+void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int output_size) {
+    // Traverse the protocolIEs to find Global-ENB-ID
+    for (int i = 0; i < setupRequest->protocolIEs.list.count; i++) {
+        S1SetupRequestIEs_t *ie = setupRequest->protocolIEs.list.array[i];
+
+        // Check if the current IE is Global-ENB-ID
+        if (ie->id == ProtocolIE_ID_id_Global_ENB_ID) {
+            Global_ENB_ID_t *enbID = &ie->value.choice.Global_ENB_ID;
+
+            // Modify eNB-ID value
+            if (enbID->eNB_ID.present == ENB_ID_PR_macroENB_ID) {
+                memcpy(enbID->eNB_ID.choice.macroENB_ID.buf, NEW_ENB_ID, 3);
+                snprintf(output_buffer, output_size, "Replaced eNB-ID with constant value: %02X %02X %02X",
+                         NEW_ENB_ID[0], NEW_ENB_ID[1], NEW_ENB_ID[2]);
+                printf("%s\n", output_buffer); // Optional: print confirmation to console
+            }
+        }
+    }
 }
 
 
@@ -63,6 +107,7 @@ void *handle_client(void *arg) {
     client_data_t *client_data = (client_data_t *)arg;
     int client_fd = client_data->client_fd;
     char buffer[BUFFER_SIZE];
+    char output_buffer[BUFFER_SIZE];
     struct sctp_sndrcvinfo sndrcvinfo;
     int flags;
 
@@ -80,24 +125,29 @@ void *handle_client(void *arg) {
         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
         // Decode S1AP message and store locally in the client-specific buffer
-        decode_s1ap_message(buffer, bytes_received, client_data->s1ap_info_buffer);
-        printf("Decoded S1AP Info: %s\n", client_data->s1ap_info_buffer);
+        int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE);
+        if (encoded_size > 0)
+        {
+            printf("Modified S1AP message successfully.\n");
+            //Forward modified data to MME
+            pthread_mutex_lock(&mme_mutex);
+            sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+            pthread_mutex_unlock(&mme_mutex);
+        }
 
-        // Forward data to MME on the same stream
-        pthread_mutex_lock(&mme_mutex);
-        sctp_sendmsg(mme_fd, buffer, BUFFER_SIZE, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-        // Receive response from the MME
+        // Receive response from MME
         int bytes_from_mme = sctp_recvmsg(mme_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-        pthread_mutex_unlock(&mme_mutex);
-
-        if(bytes_from_mme<=0){
+        if (bytes_from_mme <= 0) {
             printf("MME disconnected or error occurred. Closing connection.\n");
             break;
         }
+
         buffer[bytes_from_mme] = '\0';
         printf("Received from MME on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
+
         // Send the response back to the client on the same stream
-        sctp_sendmsg(client_fd, buffer, BUFFER_SIZE, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+        sctp_sendmsg(client_fd, buffer, bytes_from_mme, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+        
     }
 
     close(client_fd); // Close client connection
@@ -107,11 +157,10 @@ void *handle_client(void *arg) {
 int main() {
     int server_fd, client_fd;
     struct sockaddr_in server_addr, client_addr, mme_addr;
-    char buffer[BUFFER_SIZE];
     socklen_t addr_len = sizeof(client_addr);
     pthread_t thread_id;
 
-    // Step 1: Connect to the MME server
+    // Connect to the MME server
     mme_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
     if (mme_fd < 0) {
         perror("MME socket creation failed");
@@ -135,7 +184,7 @@ int main() {
 
     printf("Connected to MME at %s:%d\n", MME_ADDRESS, MME_PORT);
 
-    // Step 2: Set up the SCTP server for client connections
+    // Set up SCTP server for client connections
     server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
     if (server_fd < 0) {
         perror("Client socket creation failed");
@@ -143,19 +192,12 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // Configure SCTP server to support multiple streams
-    struct  sctp_initmsg initmsg = {0};
-    initmsg.sinit_num_ostreams = 10; // Outbound streams
-    initmsg.sinit_max_instreams = 10; // Inbound streams
-    initmsg.sinit_max_attempts = 10; //Maximum attempts
+    struct sctp_initmsg initmsg = {0};
+    initmsg.sinit_num_ostreams = 10;
+    initmsg.sinit_max_instreams = 10;
+    initmsg.sinit_max_attempts = 10;
 
-    if (setsockopt(server_fd, IPPROTO_SCTP, SCTP_INITMSG, &initmsg, sizeof(initmsg)) < 0)
-    {
-        perror("SCTP INITMSG failed");
-        close(server_fd);
-        close(mme_fd);
-        exit(EXIT_FAILURE);
-    }
+    setsockopt(server_fd, IPPROTO_SCTP, SCTP_INITMSG, &initmsg, sizeof(initmsg));
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -178,7 +220,6 @@ int main() {
 
     printf("Listening for client connections on port %d...\n", CLIENT_PORT);
 
-    // Step 3: Accept and handle client connections
     while (1) {
         client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
         if (client_fd < 0) {
@@ -189,18 +230,14 @@ int main() {
         printf("New client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
-        // Create a thread for the new client connection
-        // int *client_fd_ptr = malloc(sizeof(int));
-        // *client_fd_ptr = client_fd;
-        client_data_t *client_data = malloc(sizeof(client_data_t));
-        client_data->client_fd = client_fd;
+        int *client_fd_ptr = malloc(sizeof(int));
+        *client_fd_ptr = client_fd;
 
-        if (pthread_create(&thread_id, NULL, handle_client, client_data) != 0) {
+        if (pthread_create(&thread_id, NULL, handle_client, client_fd_ptr) != 0) {
             perror("Thread creation failed");
             close(client_fd);
-            free(client_data);
         } else {
-            pthread_detach(thread_id);  // Detach thread to clean up resources when done
+            pthread_detach(thread_id); // Detach thread for automatic cleanup
         }
     }
 
