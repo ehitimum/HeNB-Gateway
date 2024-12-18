@@ -44,7 +44,7 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
     if (rval.code != RC_OK)
     {
         snprintf(output_buffer, BUFFER_SIZE, "Failed to decode S1AP message.");\
-        return;
+        return -1;
     }
 
     // printf("Decoded S1AP Message:\n");
@@ -52,15 +52,32 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
     // asn_fprint(stdout, &asn_DEF_S1AP_PDU, pdu);
 
      // Check if the message is an InitiatingMessage
-    if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
-        InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
-        if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
-            S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
+    // if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
+    //     InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
+    //     if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
+    //         S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
 
-            // Call the separate function to replace eNB-ID
-            replace_enb_id(setupRequest, output_buffer, output_size);
-        }
+    //         // Call the separate function to replace eNB-ID
+    //         replace_enb_id(setupRequest, output_buffer, output_size);
+    //     }
+    // }
+    if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
+    InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
+
+    // Check if the message is a NAS-EPS message
+    if (initMsg->value.present == InitiatingMessage__value_PR_UplinkNASTransport) {
+        // Handle NAS-EPS message or simply skip processing
+        snprintf(output_buffer, output_size, "NAS-EPS message received, skipping eNB-ID replacement.");
+        printf("%s\n", output_buffer); // Log it for debugging
+    } else if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
+        // Handle S1SetupRequest messages
+        S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
+
+        // Call the separate function to replace eNB-ID
+        replace_enb_id(setupRequest, output_buffer, output_size);
     }
+}
+
 
     asn_enc_rval_t enc_rval;
     enc_rval = asn_encode_to_buffer(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, pdu, output_buffer, output_size);
