@@ -15,6 +15,7 @@
 #include "Global-ENB-ID.h"
 #include "ProtocolIE-Field.h"
 #include "S1SetupRequest.h"
+#include "hashmap.h"
 
 
 #define CLIENT_PORT 36412      // Port for clients to connect
@@ -26,7 +27,19 @@
 int mme_fd;  // Global MME connection (shared by threads, can be thread-safe with mutex)
 pthread_mutex_t mme_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-const char NEW_ENB_ID[] = {0x00, 0x12, 0x34};
+HashMap *map = NULL;
+
+//const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
+int decimal = 107021;
+char NEW_ENB_ID[10];
+
+
+void decimalToHex(int decimal, char *hexStr) {
+    // Use sprintf to convert decimal to hexadecimal
+    sprintf(hexStr, "0x%X", decimal);
+}
+
+
 
 typedef struct
 {
@@ -100,6 +113,10 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
 }
 
 void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int output_size) {
+    map = createHashMap(10);
+    printf("OK\n");
+    decimalToHex(decimal, NEW_ENB_ID);
+
     // Traverse the protocolIEs to find Global-ENB-ID
     for (int i = 0; i < setupRequest->protocolIEs.list.count; i++) {
         S1SetupRequestIEs_t *ie = setupRequest->protocolIEs.list.array[i];
@@ -110,13 +127,23 @@ void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int out
 
             // Modify eNB-ID value
             if (enbID->eNB_ID.present == ENB_ID_PR_macroENB_ID) {
+                printf("Inserting value: 0x%X\n", *(uint32_t *)(enbID->eNB_ID.choice.macroENB_ID.buf));
+                insert(map, NEW_ENB_ID, *(uint32_t *) enbID->eNB_ID.choice.macroENB_ID.buf);
                 memcpy(enbID->eNB_ID.choice.macroENB_ID.buf, NEW_ENB_ID, 3);
+                
                 snprintf(output_buffer, output_size, "Replaced eNB-ID with constant value: %02X %02X %02X",
                          NEW_ENB_ID[0], NEW_ENB_ID[1], NEW_ENB_ID[2]);
+                
                 printf("%s\n", output_buffer); // Optional: print confirmation to console
+                uint32_t value = get(map, NEW_ENB_ID);
+                printf("Old EnbID: 0x%X\n", value);
+
             }
         }
     }
+}
+
+void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size){
 }
 
 
@@ -146,6 +173,8 @@ void *handle_client(void *arg) {
         if (encoded_size > 0)
         {
             printf("Modified S1AP message successfully.\n");
+            uint32_t value = get(map, NEW_ENB_ID);
+            printf("Old EnbID: %u\n", value);
             //Forward modified data to MME
             pthread_mutex_lock(&mme_mutex);
             sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
