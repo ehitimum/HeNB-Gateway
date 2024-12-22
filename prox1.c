@@ -32,7 +32,7 @@ HashMap *map = NULL;
 //const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
 int decimal = 107021;
 char NEW_ENB_ID[10];
-char NEW_CELL_ID[4];
+
 
 
 
@@ -50,7 +50,7 @@ typedef struct
 }client_data_t;
 
 
-int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size){
+int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID, uint32_t NEW_ENB_UE_ID){
     S1AP_PDU_t *pdu = NULL;
     asn_dec_rval_t rval;
 
@@ -74,7 +74,13 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
             break;
         case InitiatingMessage__value_PR_InitialUEMessage:
             InitialUEMessage_t *initialUEMsg = &initMsg->value.choice.InitialUEMessage;
-            replace_cell_id(initialUEMsg, output_buffer, output_size);
+            replace_cell_id(initialUEMsg, output_buffer, output_size, NEW_CELL_ID);
+            replace_enb_ue_id(initialUEMsg, output_buffer, output_size, NEW_ENB_UE_ID);
+            break;
+        case InitiatingMessage__value_PR_UplinkNASTransport:
+            UplinkNASTransport_t *uplink = &initMsg->value.choice.UplinkNASTransport;
+            replace_uplink_cell_id(uplink, output_buffer, output_size, NEW_CELL_ID);
+            break;
         default:
             break;
         }
@@ -138,7 +144,7 @@ void cellIdentityCal(uint8_t *cellIdentity) {
 }
 
 
-void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size) {
+void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size, char *NEW_CELL_ID) {
     printf("Starting Cell ID replacement.\n");
     for (int i = 0; i < initialUEMsg->protocolIEs.list.count; i++) {
         InitialUEMessage_IEs_t *ie = initialUEMsg->protocolIEs.list.array[i];
@@ -179,10 +185,77 @@ void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int 
     }
 }
 
+void replace_uplink_cell_id(UplinkNASTransport_t *uplink, char *output_buffer, int output_size, char *NEW_CELL_ID) {
+    printf("Starting Cell ID replacement.\n");
+    for (int i = 0; i < uplink->protocolIEs.list.count; i++) {
+        UplinkNASTransport_IEs_t *ie = uplink->protocolIEs.list.array[i];
+        if (ie->id == ProtocolIE_ID_id_EUTRAN_CGI) {
+            EUTRAN_CGI_t *cellID = &ie->value.choice.EUTRAN_CGI;
+            if (cellID->cell_ID.buf != NULL && cellID->cell_ID.size == 4) {
+                // Print the old Cell ID
+                printf("Old Cell ID: %02X %02X %02X %02X\n",
+                       cellID->cell_ID.buf[0], cellID->cell_ID.buf[1],
+                       cellID->cell_ID.buf[2], cellID->cell_ID.buf[3]);
 
+                // Generate the new Cell ID
+                //cellIdentityCal(NEW_CELL_ID);
 
+                // Store the old Cell ID in the map
+                //insert(map, NEW_CELL_ID, *(uint32_t *)cellID->cell_ID.buf);
 
+                // Replace the Cell ID in the buffer
+                memcpy(cellID->cell_ID.buf, NEW_CELL_ID, 4);
 
+                // Format the output message
+                snprintf(output_buffer, output_size, "Replaced Cell ID with constant value: %02X %02X %02X %02X",
+                         NEW_CELL_ID[0], NEW_CELL_ID[1], NEW_CELL_ID[2], NEW_CELL_ID[3]);
+
+                // Print the confirmation message
+                printf("%s\n", output_buffer);
+
+                // Optionally, retrieve the old value from the map for debugging
+                uint32_t oldValue = get(map, NEW_CELL_ID);
+                printf("Old Cell ID stored in map: 0x%X\n", oldValue);
+            } else {
+                printf("Cell ID field is not properly initialized or has an unexpected size.\n");
+            }
+
+            // Stop processing further as we've found the desired IE
+            break;
+        }
+    }
+}
+
+void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size, uint32_t NEW_ENB_UE_ID) {
+    printf("Starting ENB UE ID Replacement.\n");
+    
+    for (int i = 0; i < initialUEMsg->protocolIEs.list.count; i++) {
+        InitialUEMessage_IEs_t *ie = initialUEMsg->protocolIEs.list.array[i];
+        if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) {
+            ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+            
+            if (ueID) {
+                // Print the old ENB UE ID
+                printf("Old ENB UE ID: %u\n", *ueID);
+
+                // Replace the ENB UE ID with the new value
+                //*ueID = NEW_ENB_UE_ID;
+
+                // Format the output message
+                snprintf(output_buffer, output_size, "Replaced ENB UE ID with new value: %u", NEW_ENB_UE_ID);
+                
+                // Print the confirmation message
+                printf("%s\n", output_buffer);
+            } else {
+                printf("ENB UE ID field is not properly initialized.\n");
+            }
+
+            // Stop processing further as we've found the desired IE
+            break;
+        }
+    }
+
+}
 void *handle_client(void *arg) {
     client_data_t *client_data = (client_data_t *)arg;
     int client_fd = client_data->client_fd;
@@ -190,6 +263,10 @@ void *handle_client(void *arg) {
     char output_buffer[BUFFER_SIZE];
     struct sctp_sndrcvinfo sndrcvinfo;
     int flags;
+    char NEW_CELL_ID[4];
+    uint32_t NEW_ENB_UE_ID;
+
+    
 
     
     free(arg); // Free memory allocated for client_fd
@@ -205,7 +282,7 @@ void *handle_client(void *arg) {
         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
         // Decode S1AP message and store locally in the client-specific buffer
-        int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE);
+        int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID, NEW_ENB_UE_ID);
         if (encoded_size > 0)
         {
             printf("Modified S1AP message successfully.\n");
@@ -331,5 +408,7 @@ int main() {
 
     close(server_fd);
     close(mme_fd);
+    free(map->buckets);
+    free(map);
     return 0;
 }
