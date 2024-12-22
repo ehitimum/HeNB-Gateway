@@ -32,6 +32,8 @@ HashMap *map = NULL;
 //const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
 int decimal = 107021;
 char NEW_ENB_ID[10];
+char NEW_CELL_ID[4];
+
 
 
 void decimalToHex(int decimal, char *hexStr) {
@@ -60,51 +62,30 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
         return -1;
     }
 
-    // printf("Decoded S1AP Message:\n");
-    // // Print the decoded structure in XML format for better understanding
-    // asn_fprint(stdout, &asn_DEF_S1AP_PDU, pdu);
-
-     // Check if the message is an InitiatingMessage
-    // if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
-    //     InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
-    //     if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
-    //         S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
-
-    //         // Call the separate function to replace eNB-ID
-    //         replace_enb_id(setupRequest, output_buffer, output_size);
-    //     }
-    // }
-    if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
-    InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
-
-    // Check if the message is a NAS-EPS message
-    if (initMsg->value.present == InitiatingMessage__value_PR_UplinkNASTransport) {
-        // Handle NAS-EPS message or simply skip processing
-        snprintf(output_buffer, output_size, "NAS-EPS message received, skipping eNB-ID replacement.");
-        printf("%s\n", output_buffer); // Log it for debugging
-    } else if (initMsg->value.present == InitiatingMessage__value_PR_S1SetupRequest) {
-        // Handle S1SetupRequest messages
-        S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
-
-        // Call the separate function to replace eNB-ID
-        replace_enb_id(setupRequest, output_buffer, output_size);
+    if (pdu->present == S1AP_PDU_PR_initiatingMessage)
+    {
+        InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
+        switch (initMsg->value.present)
+        {
+        case InitiatingMessage__value_PR_S1SetupRequest:
+            S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
+            // Call the separate function to replace eNB-ID
+            replace_enb_id(setupRequest, output_buffer, output_size);
+            break;
+        case InitiatingMessage__value_PR_InitialUEMessage:
+            InitialUEMessage_t *initialUEMsg = &initMsg->value.choice.InitialUEMessage;
+            replace_cell_id(initialUEMsg, output_buffer, output_size);
+        default:
+            break;
+        }
     }
-}
-
-
+    
     asn_enc_rval_t enc_rval;
     enc_rval = asn_encode_to_buffer(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, pdu, output_buffer, output_size);
     if (enc_rval.encoded < 0) {
         snprintf(output_buffer, output_size, "Failed to encode modified S1AP message.");
         return -1;
     }
-
-    // if (pdu->present == S1AP_PDU_PR_initiatingMessage)
-    // {
-    //     snprintf(output_buffer, BUFFER_SIZE, "Decoded S1AP Initiating Message, size: %d bytes", length);
-    // } else {
-    //     snprintf(output_buffer, BUFFER_SIZE, "Unsupported S1AP message type.");
-    // }
 
     ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
     return enc_rval.encoded;
@@ -113,7 +94,6 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
 }
 
 void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int output_size) {
-    map = createHashMap(10);
     printf("OK\n");
     decimalToHex(decimal, NEW_ENB_ID);
 
@@ -143,8 +123,64 @@ void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int out
     }
 }
 
-void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size){
+void cellIdentityCal(uint8_t *cellIdentity) {
+    printf("ok\n");
+    uint8_t randomCellID = rand() % 256;  // Generate random Cell ID
+    printf("ok\n");
+    int cellid = decimal * 256 + randomCellID;  // Calculate new Cell ID
+    printf("Calculated Cell ID: 0x%X\n", cellid);
+
+    // Copy the 4-byte integer into the buffer
+    cellIdentity[0] = (cellid >> 24) & 0xFF;
+    cellIdentity[1] = (cellid >> 16) & 0xFF;
+    cellIdentity[2] = (cellid >> 8) & 0xFF;
+    cellIdentity[3] = cellid & 0xFF;
 }
+
+
+void replace_cell_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size) {
+    printf("Starting Cell ID replacement.\n");
+    for (int i = 0; i < initialUEMsg->protocolIEs.list.count; i++) {
+        InitialUEMessage_IEs_t *ie = initialUEMsg->protocolIEs.list.array[i];
+        if (ie->id == ProtocolIE_ID_id_EUTRAN_CGI) {
+            EUTRAN_CGI_t *cellID = &ie->value.choice.EUTRAN_CGI;
+            if (cellID->cell_ID.buf != NULL && cellID->cell_ID.size == 4) {
+                // Print the old Cell ID
+                printf("Old Cell ID: %02X %02X %02X %02X\n",
+                       cellID->cell_ID.buf[0], cellID->cell_ID.buf[1],
+                       cellID->cell_ID.buf[2], cellID->cell_ID.buf[3]);
+
+                // Generate the new Cell ID
+                cellIdentityCal(NEW_CELL_ID);
+
+                // Store the old Cell ID in the map
+                insert(map, NEW_CELL_ID, *(uint32_t *)cellID->cell_ID.buf);
+
+                // Replace the Cell ID in the buffer
+                memcpy(cellID->cell_ID.buf, NEW_CELL_ID, 4);
+
+                // Format the output message
+                snprintf(output_buffer, output_size, "Replaced Cell ID with constant value: %02X %02X %02X %02X",
+                         NEW_CELL_ID[0], NEW_CELL_ID[1], NEW_CELL_ID[2], NEW_CELL_ID[3]);
+
+                // Print the confirmation message
+                printf("%s\n", output_buffer);
+
+                // Optionally, retrieve the old value from the map for debugging
+                uint32_t oldValue = get(map, NEW_CELL_ID);
+                printf("Old Cell ID stored in map: 0x%X\n", oldValue);
+            } else {
+                printf("Cell ID field is not properly initialized or has an unexpected size.\n");
+            }
+
+            // Stop processing further as we've found the desired IE
+            break;
+        }
+    }
+}
+
+
+
 
 
 void *handle_client(void *arg) {
@@ -174,7 +210,11 @@ void *handle_client(void *arg) {
         {
             printf("Modified S1AP message successfully.\n");
             uint32_t value = get(map, NEW_ENB_ID);
-            printf("Old EnbID: %u\n", value);
+            printf("Old EnbID: %X\n", value);
+
+            uint32_t oldValue = get(map, NEW_CELL_ID);
+            printf("Old Cell ID stored in map: 0x%X\n", oldValue);
+
             //Forward modified data to MME
             pthread_mutex_lock(&mme_mutex);
             sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
@@ -205,6 +245,8 @@ int main() {
     struct sockaddr_in server_addr, client_addr, mme_addr;
     socklen_t addr_len = sizeof(client_addr);
     pthread_t thread_id;
+    map = createHashMap(10);
+
 
     // Connect to the MME server
     mme_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
