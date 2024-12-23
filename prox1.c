@@ -50,54 +50,89 @@ typedef struct
 }client_data_t;
 
 
-int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID, uint32_t NEW_ENB_UE_ID){
+int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID, uint32_t NEW_ENB_UE_ID) {
     S1AP_PDU_t *pdu = NULL;
     asn_dec_rval_t rval;
 
-    //Decode S1AP PDU
+    // Decode S1AP PDU
     rval = asn_decode(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, (void **)&pdu, input, input_size);
-    if (rval.code != RC_OK)
-    {
-        snprintf(output_buffer, BUFFER_SIZE, "Failed to decode S1AP message.");\
+    if (rval.code != RC_OK) {
+        snprintf(output_buffer, output_size, "Failed to decode S1AP message.");
         return -1;
     }
 
-    if (pdu->present == S1AP_PDU_PR_initiatingMessage)
-    {
-        InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
-        switch (initMsg->value.present)
-        {
-        case InitiatingMessage__value_PR_S1SetupRequest:
+    // Check if the PDU is an initiating message
+    if (pdu->present != S1AP_PDU_PR_initiatingMessage) {
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+        return 0; // No modifications
+    }
+
+    // Process the initiating message
+    InitiatingMessage_t *initMsg = pdu->choice.initiatingMessage;
+    switch (initMsg->value.present) {
+        case InitiatingMessage__value_PR_S1SetupRequest: {
             S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
-            // Call the separate function to replace eNB-ID
             replace_enb_id(setupRequest, output_buffer, output_size);
             break;
-        case InitiatingMessage__value_PR_InitialUEMessage:
+        }
+        case InitiatingMessage__value_PR_InitialUEMessage: {
             InitialUEMessage_t *initialUEMsg = &initMsg->value.choice.InitialUEMessage;
             replace_cell_id(initialUEMsg, output_buffer, output_size, NEW_CELL_ID);
             replace_enb_ue_id(initialUEMsg, output_buffer, output_size, NEW_ENB_UE_ID);
             break;
-        case InitiatingMessage__value_PR_UplinkNASTransport:
+        }
+        case InitiatingMessage__value_PR_UplinkNASTransport: {
             UplinkNASTransport_t *uplink = &initMsg->value.choice.UplinkNASTransport;
             replace_uplink_cell_id(uplink, output_buffer, output_size, NEW_CELL_ID);
             break;
-        default:
+        }
+        case InitiatingMessage__value_PR_UEContextReleaseRequest: {
+            UEContextReleaseRequest_t *releaseReq = &initMsg->value.choice.UEContextReleaseRequest;
+            check_gw_context_release_indication(releaseReq, output_buffer, output_size);
             break;
         }
+        default:
+            printf("Not Mentioned Message.\n");
+            break;
     }
-    
+
+    // Encode the modified message back to buffer
     asn_enc_rval_t enc_rval;
     enc_rval = asn_encode_to_buffer(NULL, ATS_ALIGNED_BASIC_PER, &asn_DEF_S1AP_PDU, pdu, output_buffer, output_size);
     if (enc_rval.encoded < 0) {
         snprintf(output_buffer, output_size, "Failed to encode modified S1AP message.");
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
         return -1;
     }
 
     ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
     return enc_rval.encoded;
-    
-    
 }
+
+void check_gw_context_release_indication(UEContextReleaseRequest_t *releaseRequest, char *output_buffer, int output_size) {
+    printf("Checking GW Context Release Indication...\n");
+
+    // Traverse the protocolIEs to find the GWContextReleaseIndication
+    for (int i = 0; i < releaseRequest->protocolIEs.list.count; i++) {
+        UEContextReleaseRequest_IEs_t *ie = releaseRequest->protocolIEs.list.array[i];
+
+        // Check if the current IE is GWContextReleaseIndication
+        if (ie->id == ProtocolIE_ID_id_GWContextReleaseIndication) {
+            // Extract the value of GWContextReleaseIndication (which should be a boolean)
+            GWContextReleaseIndication_t *gwContextIndication = &ie->value.choice.GWContextReleaseIndication;
+
+            // Check if the GWContextReleaseIndication is set (true or false)
+            if (*gwContextIndication == 1) {  // Assuming 1 means it's set (true)
+                snprintf(output_buffer, output_size, "GWContextReleaseIndication is set: TRUE");
+                printf("%s\n", output_buffer);  // Optional: print confirmation to console
+            } else {
+                snprintf(output_buffer, output_size, "GWContextReleaseIndication is not set: FALSE");
+                printf("%s\n", output_buffer);  // Optional: print confirmation to console
+            }
+        }
+    }
+}
+
 
 void replace_enb_id(S1SetupRequest_t *setupRequest, char *output_buffer, int output_size) {
     printf("OK\n");
@@ -196,24 +231,10 @@ void replace_uplink_cell_id(UplinkNASTransport_t *uplink, char *output_buffer, i
                 printf("Old Cell ID: %02X %02X %02X %02X\n",
                        cellID->cell_ID.buf[0], cellID->cell_ID.buf[1],
                        cellID->cell_ID.buf[2], cellID->cell_ID.buf[3]);
-
-                // Generate the new Cell ID
-                //cellIdentityCal(NEW_CELL_ID);
-
-                // Store the old Cell ID in the map
-                //insert(map, NEW_CELL_ID, *(uint32_t *)cellID->cell_ID.buf);
-
-                // Replace the Cell ID in the buffer
                 memcpy(cellID->cell_ID.buf, NEW_CELL_ID, 4);
-
-                // Format the output message
                 snprintf(output_buffer, output_size, "Replaced Cell ID with constant value: %02X %02X %02X %02X",
                          NEW_CELL_ID[0], NEW_CELL_ID[1], NEW_CELL_ID[2], NEW_CELL_ID[3]);
-
-                // Print the confirmation message
                 printf("%s\n", output_buffer);
-
-                // Optionally, retrieve the old value from the map for debugging
                 uint32_t oldValue = get(map, NEW_CELL_ID);
                 printf("Old Cell ID stored in map: 0x%X\n", oldValue);
             } else {
@@ -256,6 +277,7 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
     }
 
 }
+
 void *handle_client(void *arg) {
     client_data_t *client_data = (client_data_t *)arg;
     int client_fd = client_data->client_fd;
@@ -266,39 +288,35 @@ void *handle_client(void *arg) {
     char NEW_CELL_ID[4];
     uint32_t NEW_ENB_UE_ID;
 
-    
+    free(arg); // Free memory allocated for client_data
 
-    
-    free(arg); // Free memory allocated for client_fd
-
-    while(1){
+    while (1) {
         // Receive data from the client, including SCTP metadata
         int bytes_received = sctp_recvmsg(client_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-        if(bytes_received<=0){
+        if (bytes_received <= 0) {
             printf("Client disconnected or error occurred. Closing connection.\n");
             break;
         }
         buffer[bytes_received] = '\0';
         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
-        // Decode S1AP message and store locally in the client-specific buffer
+        // Decode and optionally modify the S1AP message
         int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID, NEW_ENB_UE_ID);
-        if (encoded_size > 0)
-        {
+
+        // Forward the packet to the MME
+        pthread_mutex_lock(&mme_mutex);
+        if (encoded_size > 0) {
+            // Send the modified packet
             printf("Modified S1AP message successfully.\n");
-            uint32_t value = get(map, NEW_ENB_ID);
-            printf("Old EnbID: %X\n", value);
-
-            uint32_t oldValue = get(map, NEW_CELL_ID);
-            printf("Old Cell ID stored in map: 0x%X\n", oldValue);
-
-            //Forward modified data to MME
-            pthread_mutex_lock(&mme_mutex);
             sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-            pthread_mutex_unlock(&mme_mutex);
+        } else {
+            // Send the unmodified packet
+            printf("No modifications made. Forwarding the original packet to MME.\n");
+            sctp_sendmsg(mme_fd, buffer, bytes_received, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
         }
+        pthread_mutex_unlock(&mme_mutex);
 
-        // Receive response from MME
+        // Receive response from the MME
         int bytes_from_mme = sctp_recvmsg(mme_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
         if (bytes_from_mme <= 0) {
             printf("MME disconnected or error occurred. Closing connection.\n");
@@ -310,11 +328,42 @@ void *handle_client(void *arg) {
 
         // Send the response back to the client on the same stream
         sctp_sendmsg(client_fd, buffer, bytes_from_mme, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-        
     }
 
     close(client_fd); // Close client connection
     return NULL;
+}
+
+
+void capture_and_save_initial_ue_message(InitialUEMessage_t *initialUEMsg, const char *filename) {
+    // Open the file for saving
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        perror("Failed to open file for saving InitialUEMessage");
+        return;
+    }
+
+    // Allocate a buffer for encoding
+    unsigned char buffer[1024]; // Adjust size based on expected message size
+    asn_enc_rval_t encode_result = asn_encode_to_buffer(
+        0,                  // No constraints checking
+        ATS_BER,            // BER encoding
+        &asn_DEF_InitialUEMessage, // ASN.1 type descriptor
+        initialUEMsg,       // The structure to encode
+        buffer,             // The buffer to encode into
+        sizeof(buffer)      // Size of the buffer
+    );
+
+    // Check if encoding was successful
+    if (encode_result.encoded > 0 && (size_t)encode_result.encoded <= sizeof(buffer)) {
+        // Write the encoded message to the file
+        fwrite(buffer, 1, encode_result.encoded, file);
+        printf("InitialUEMessage successfully saved to %s\n", filename);
+    } else {
+        printf("Failed to encode InitialUEMessage. Error code: %ld\n", encode_result.encoded);
+    }
+
+    fclose(file);
 }
 
 int main() {
@@ -358,9 +407,9 @@ int main() {
     }
 
     struct sctp_initmsg initmsg = {0};
-    initmsg.sinit_num_ostreams = 10;
-    initmsg.sinit_max_instreams = 10;
-    initmsg.sinit_max_attempts = 10;
+    initmsg.sinit_num_ostreams = 100;
+    initmsg.sinit_max_instreams = 100;
+    initmsg.sinit_max_attempts = 100;
 
     setsockopt(server_fd, IPPROTO_SCTP, SCTP_INITMSG, &initmsg, sizeof(initmsg));
 
