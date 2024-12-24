@@ -32,6 +32,7 @@ HashMap *map = NULL;
 //const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
 int decimal = 107021;
 char NEW_ENB_ID[10];
+u_int32_t NEW_ENB_S1AP_ID = 0;
 
 
 
@@ -50,7 +51,7 @@ typedef struct
 }client_data_t;
 
 
-int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID, uint32_t NEW_ENB_UE_ID) {
+int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID) {
     S1AP_PDU_t *pdu = NULL;
     asn_dec_rval_t rval;
 
@@ -76,23 +77,45 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
             break;
         }
         case InitiatingMessage__value_PR_InitialUEMessage: {
+            printf("----------------------InitialUEMsg------------------\n");
             InitialUEMessage_t *initialUEMsg = &initMsg->value.choice.InitialUEMessage;
             replace_cell_id(initialUEMsg, output_buffer, output_size, NEW_CELL_ID);
-            replace_enb_ue_id(initialUEMsg, output_buffer, output_size, NEW_ENB_UE_ID);
+            replace_enb_ue_id(initialUEMsg, output_buffer, output_size);
             break;
         }
         case InitiatingMessage__value_PR_UplinkNASTransport: {
+            printf("----------------------UplinkNASTransport------------------\n");
             UplinkNASTransport_t *uplink = &initMsg->value.choice.UplinkNASTransport;
             replace_uplink_cell_id(uplink, output_buffer, output_size, NEW_CELL_ID);
+            replace_uplink_enb_ue_id(uplink, output_buffer, output_size);
             break;
         }
         case InitiatingMessage__value_PR_UEContextReleaseRequest: {
+            printf("----------------------UEContextReleaseRequest------------------\n");
             UEContextReleaseRequest_t *releaseReq = &initMsg->value.choice.UEContextReleaseRequest;
             check_gw_context_release_indication(releaseReq, output_buffer, output_size);
             break;
         }
+        case InitiatingMessage__value_PR_DownlinkNASTransport: {
+            printf("----------------------DownlinkNASTransport------------------\n");
+            DownlinkNASTransport_t *downLink = &initMsg->value.choice.DownlinkNASTransport;
+            replace_downlink_ue_id(downLink, output_buffer, output_size);
+            break;
+        }
+        case InitiatingMessage__value_PR_InitialContextSetupRequest:{
+            printf("----------------------Initial Context Setup------------------\n");
+            InitialContextSetupRequest_t *context = &initMsg->value.choice.InitialContextSetupRequest;
+            replace_InitialContextSetup_ue_id(context,  output_buffer, output_size);
+            break;
+        }
+        case InitiatingMessage__value_PR_UECapabilityInfoIndication:{
+            printf("----------------------UECapabilityInfoIndication------------------\n");
+            UECapabilityInfoIndication_t *ueCap = &initMsg->value.choice.UECapabilityInfoIndication;
+            replace_UECap_enb_ue_id(ueCap, output_buffer, output_size);
+            break;
+        }
         default:
-            printf("Not Mentioned Message.\n");
+            printf("----------------------Some other Protocol------------------\n");
             break;
     }
 
@@ -129,6 +152,72 @@ void check_gw_context_release_indication(UEContextReleaseRequest_t *releaseReque
                 snprintf(output_buffer, output_size, "GWContextReleaseIndication is not set: FALSE");
                 printf("%s\n", output_buffer);  // Optional: print confirmation to console
             }
+        }
+    }
+}
+
+void replace_downlink_ue_id(DownlinkNASTransport_t *downLink, char *output_buffer, int output_size){
+            DownlinkNASTransport_IEs_t *ie = downLink->protocolIEs.list.array[1];
+            if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) {
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+                
+                if (ueID) {
+                    printf("Current ENB UE ID: %u\n", *ueID);
+                    u_int32_t value = get(map, *ueID);
+                    printf("Old ENB UE ID: %u\n", value);
+                    *ueID = value;
+                    snprintf(output_buffer, output_size, "Replaced ENB UE ID with old value: %u", value);
+                    printf("UEID IS NOW: %u\n", *ueID);
+                    printf("%s\n", output_buffer);
+                } else {
+                    printf("ENB UE ID field is not properly initialized.\n");
+                }
+            }
+}
+
+void replace_InitialContextSetup_ue_id(InitialContextSetupRequest_t *context,  char *output_buffer, int output_size){
+    InitialContextSetupRequestIEs_t *ie = context->protocolIEs.list.array[1];
+    if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) {
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+                
+                if (ueID) {
+                    printf("Current ENB UE ID: %u\n", *ueID);
+                    u_int32_t value = get(map, *ueID);
+                    printf("Old ENB UE ID: %u\n", value);
+                    *ueID = value;
+                    snprintf(output_buffer, output_size, "Replaced ENB UE ID with old value: %u", value);
+                    printf("UEID IS NOW: %u\n", *ueID);
+                    printf("%s\n", output_buffer);
+                } else {
+                    printf("ENB UE ID field is not properly initialized.\n");
+                }
+            }
+}
+
+void replace_UECap_enb_ue_id(UECapabilityInfoIndication_t *cap, char *output_buffer, int output_size){
+    //UECapabilityInfoIndicationIEs_t *ie = cap->protocolIEs.list.array[1];
+    for (int i = 0; i < cap->protocolIEs.list.count; i++) {
+        UECapabilityInfoIndicationIEs_t *ie = cap->protocolIEs.list.array[i];
+        if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) {
+            ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+            
+            if (ueID) {
+                // Print the old ENB UE ID
+                printf("------------------Old ENB UE ID of UE CAP: %u\n", *ueID);
+                // Replace the ENB UE ID with the new value
+                u_int32_t value = getHashKey(map, *ueID);
+                *ueID = value;
+                // Format the output message
+                snprintf(output_buffer, output_size, "-----------------Replaced ENB UE ID with new value: %u", value);
+                
+                // Print the confirmation message
+                printf("%s\n", output_buffer);
+            } else {
+                printf("----------------ENB UE ID field is not properly initialized.\n");
+            }
+
+            // Stop processing further as we've found the desired IE
+            break;
         }
     }
 }
@@ -247,7 +336,11 @@ void replace_uplink_cell_id(UplinkNASTransport_t *uplink, char *output_buffer, i
     }
 }
 
-void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size, uint32_t NEW_ENB_UE_ID) {
+u_int32_t increment_enb_s1ap_id() {
+    return ++NEW_ENB_S1AP_ID;
+}
+
+void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size) {
     printf("Starting ENB UE ID Replacement.\n");
     
     for (int i = 0; i < initialUEMsg->protocolIEs.list.count; i++) {
@@ -258,12 +351,12 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
             if (ueID) {
                 // Print the old ENB UE ID
                 printf("Old ENB UE ID: %u\n", *ueID);
-
                 // Replace the ENB UE ID with the new value
-                //*ueID = NEW_ENB_UE_ID;
-
+                increment_enb_s1ap_id();
+                insert(map, NEW_ENB_S1AP_ID, *ueID);
+                *ueID = NEW_ENB_S1AP_ID;
                 // Format the output message
-                snprintf(output_buffer, output_size, "Replaced ENB UE ID with new value: %u", NEW_ENB_UE_ID);
+                snprintf(output_buffer, output_size, "Replaced ENB UE ID with new value: %u", NEW_ENB_S1AP_ID);
                 
                 // Print the confirmation message
                 printf("%s\n", output_buffer);
@@ -278,6 +371,37 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
 
 }
 
+void replace_uplink_enb_ue_id(UplinkNASTransport_t *uplink, char *output_buffer, int output_size) {
+    printf("Starting ENB UE ID Replacement.\n");
+    
+    for (int i = 0; i < uplink->protocolIEs.list.count; i++) {
+        UplinkNASTransport_IEs_t *ie = uplink->protocolIEs.list.array[i];
+        if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) {
+            ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+            
+            if (ueID) {
+                // Print the old ENB UE ID
+                printf("Old ENB UE ID: %u\n", *ueID);
+                // Replace the ENB UE ID with the new value
+                u_int32_t value = getHashKey(map, *ueID);
+                *ueID = value;
+                // Format the output message
+                snprintf(output_buffer, output_size, "Replaced ENB UE ID with new value: %u", NEW_ENB_S1AP_ID);
+                
+                // Print the confirmation message
+                printf("%s\n", output_buffer);
+            } else {
+                printf("ENB UE ID field is not properly initialized.\n");
+            }
+
+            // Stop processing further as we've found the desired IE
+            break;
+        }
+    }
+
+}
+
+
 void *handle_client(void *arg) {
     client_data_t *client_data = (client_data_t *)arg;
     int client_fd = client_data->client_fd;
@@ -286,7 +410,7 @@ void *handle_client(void *arg) {
     struct sctp_sndrcvinfo sndrcvinfo;
     int flags;
     char NEW_CELL_ID[4];
-    uint32_t NEW_ENB_UE_ID;
+    //uint32_t NEW_ENB_UE_ID;
 
     free(arg); // Free memory allocated for client_data
 
@@ -301,13 +425,21 @@ void *handle_client(void *arg) {
         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
         // Decode and optionally modify the S1AP message
-        int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID, NEW_ENB_UE_ID);
+        int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
 
         // Forward the packet to the MME
         pthread_mutex_lock(&mme_mutex);
         if (encoded_size > 0) {
             // Send the modified packet
             printf("Modified S1AP message successfully.\n");
+            uint32_t value = get(map, NEW_ENB_ID);
+            printf("Old EnbID: %X\n", value);
+
+            uint32_t oldValue = get(map, NEW_CELL_ID);
+            printf("Old Cell ID stored in map: 0x%X\n", oldValue);
+
+            uint32_t ueValue = get(map, NEW_ENB_S1AP_ID);
+            printf("Old ENB UE ID: %u\n", ueValue);
             sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
         } else {
             // Send the unmodified packet
@@ -326,8 +458,20 @@ void *handle_client(void *arg) {
         buffer[bytes_from_mme] = '\0';
         printf("Received from MME on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
-        // Send the response back to the client on the same stream
-        sctp_sendmsg(client_fd, buffer, bytes_from_mme, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+        int re_encoded_size = decode_s1ap_message(buffer, bytes_from_mme, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
+
+        //pthread_mutex_lock(&mme_mutex);
+        if (re_encoded_size > 0) {
+            // Send the modified packet
+            printf("Modified incoming MME S1AP message successfully.\n");
+            sctp_sendmsg(client_fd, output_buffer, re_encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+        } else {
+            // Send the unmodified packet
+            printf("No modifications made. Forwarding the original packet to Client.\n");
+            sctp_sendmsg(client_fd, buffer, bytes_from_mme, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+        }
+        //pthread_mutex_unlock(&mme_mutex);
+        
     }
 
     close(client_fd); // Close client connection

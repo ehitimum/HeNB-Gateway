@@ -38,6 +38,19 @@ uint32_t get(HashMap *map, uint32_t key) {
     return 0; // Key not found
 }
 
+uint32_t getHashKey(HashMap *map, uint32_t value) {
+    for (int i = 0; i < map->size; i++) { // Iterate through all buckets
+        Node *current = map->buckets[i];
+        while (current) { // Iterate through the linked list in each bucket
+            if (current->value == value) { // Check if the value matches
+                return current->key; // Return the corresponding key
+            }
+            current = current->next;
+        }
+    }
+    return 0; // Value not found
+}
+
 // Remove a key-value pair from the hash map
 void removeKey(HashMap *map, uint32_t key) {
     unsigned int index = hash(key, map->size);
