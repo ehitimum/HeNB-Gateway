@@ -21,6 +21,7 @@ unsigned int hash(uint32_t key, int size);
 HashMap *createHashMap(int size);
 void insert(HashMap *map, uint32_t key, uint32_t value);
 uint32_t get(HashMap *map, uint32_t key);
+uint32_t getHashKey(HashMap *map, uint32_t value);
 void removeKey(HashMap *map, uint32_t key);
 void freeHashMap(HashMap *map);
 
