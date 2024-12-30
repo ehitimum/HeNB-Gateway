@@ -11,6 +11,7 @@
 
 #include "S1AP-PDU.h"
 #include "s1ap-modifier.h"
+#include "s1ap-handler.h"
 #include "InitiatingMessage.h"
 #include "asn_application.h"
 #include "asn_codecs.h"
@@ -26,6 +27,12 @@
 #define BUFFER_SIZE 9999
 #define MAX_CLIENTS 10
 
+#define MCC_MNC_BUF "\x00\xF1\x10" // MCC=001, MNC=01
+#define MCC_MNC_LEN 3
+#define TAC_BUF "\x00\x01"
+#define TAC_LEN 2
+#define ENB_NAME "Henb-Proxy"
+
 #define MESSAGE_TYPE_INITIATING (1 << 8) // High byte for category
 #define MESSAGE_TYPE_SUCCESSFUL (2 << 8)
 
@@ -40,6 +47,14 @@ HashMap *map = NULL;
 int decimal = 107021;
 char NEW_ENB_ID[10];
 u_int32_t NEW_ENB_S1AP_ID = 0;
+
+pthread_mutex_t pdu_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Assume pdu_buffer and its size are defined globally or passed appropriately
+//char pdu_buffer[BUFFER_SIZE];
+size_t pdu_length = 0;
+uint8_t *pdu_buffer = NULL;
+int check = 0;
 
 void decimalToHex(int decimal, char *hexStr)
 {
@@ -94,7 +109,9 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
     switch (initMsg->value.present) {
         case InitiatingMessage__value_PR_S1SetupRequest: {
             S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
-            replace_enb_id(setupRequest, output_buffer, output_size);
+            //replace_enb_id(setupRequest, output_buffer, output_size);
+            printf("S1Setup Request Detected\n");
+            check ++;
             break;
         }
         case InitiatingMessage__value_PR_InitialUEMessage: {
@@ -439,6 +456,20 @@ void *handle_client(void *arg)
                 memcpy(output_buffer, buffer, bytes_received);
                 encoded_size = bytes_received;
             }
+            else if (check > 0){
+                printf("Intercepted S1SetupRequest. Sending stored response to client.\n");
+                pthread_mutex_lock(&mme_mutex);
+                if (pdu_length > 0) {
+                    // Send the stored response back to the client
+                    sctp_sendmsg(client_fd, pdu_buffer, pdu_length, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+                } else {
+                    printf("No stored S1AP response to send.\n");
+                }
+                pthread_mutex_unlock(&mme_mutex);
+                check = 0;
+
+                continue;
+            }
 
             // Forward the packet to the MME
             pthread_mutex_lock(&mme_mutex);
@@ -479,6 +510,7 @@ void *handle_client(void *arg)
     close(client_fd); // Close client connection
     return NULL;
 }
+
 
 
 // void *handle_client(void *arg)
@@ -636,6 +668,38 @@ void *handle_client(void *arg)
 //     return NULL;
 // }
 
+
+void s1ap_setup_unit(int mme_fd){
+    S1AP_PDU_t *pdu = build_s1ap_setup_request(MCC_MNC_BUF, MCC_MNC_LEN, TAC_BUF, TAC_LEN, ENB_NAME);
+    if (!pdu) {
+        fprintf(stderr, "Failed to build S1AP Setup Request\n");
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    // Encode the PDU
+    uint8_t *encoded_buffer = NULL;
+    size_t encoded_size = 0;
+    if (encode_s1ap_pdu(pdu, &encoded_buffer, &encoded_size) != 0) {
+        fprintf(stderr, "Failed to encode S1AP Setup Request\n");
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    // Send the message
+    if (send_s1ap_message(mme_fd, encoded_buffer, encoded_size) != 0) {
+        fprintf(stderr, "Failed to send S1AP Setup Request\n");
+        free(encoded_buffer);
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    free(encoded_buffer);
+    ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+}
+
 int main()
 {
     int server_fd, client_fd;
@@ -670,6 +734,10 @@ int main()
     }
 
     printf("Connected to MME at %s:%d\n", MME_ADDRESS, MME_PORT);
+    //send s1setup request
+    s1ap_setup_unit(mme_fd);
+
+    pdu_buffer = receive_s1ap_message(mme_fd, &pdu_length);
 
     // Set up SCTP server for client connections
     server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
