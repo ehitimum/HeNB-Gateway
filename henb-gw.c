@@ -20,6 +20,8 @@
 #include "S1SetupRequest.h"
 #include "hashmap.h"
 #include "SuccessfulOutcome.h"
+//#include "sctp-pdu-list.h"
+//#include "sctp-mapper.h"
 
 #define CLIENT_PORT 36412 // Port for clients to connect
 #define MME_PORT 36412    // Port to connect to MME
@@ -42,6 +44,8 @@ int mme_fd; // Global MME connection (shared by threads, can be thread-safe with
 pthread_mutex_t mme_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 HashMap *map = NULL;
+//assoc_map_t *assoc_map = NULL;
+//Nexus_Sctp_t* pduHead = NULL;
 
 // const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
 int decimal = 107021;
@@ -56,6 +60,8 @@ size_t pdu_length = 0;
 uint8_t *pdu_buffer = NULL;
 int check = 0;
 
+
+
 void decimalToHex(int decimal, char *hexStr)
 {
     // Use sprintf to convert decimal to hexadecimal
@@ -65,10 +71,25 @@ void decimalToHex(int decimal, char *hexStr)
 typedef struct
 {
     int client_fd;
+    struct {
+        in_port_t port;
+        struct in_addr address;
+    } client_addr;
     char s1ap_info_buffer[BUFFER_SIZE];
 } client_data_t;
 
-int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID)
+
+pthread_mutex_t packet_store_mutex = PTHREAD_MUTEX_INITIALIZER;
+typedef struct {
+    int client_fd;
+    u_int32_t enb_ue_s1ap_id;
+} sctp_packet_info_t;
+
+HashMap *packet_store;
+
+
+
+int decode_s1ap_message(const char *input, int input_size, char *output_buffer, int output_size, char *NEW_CELL_ID, int client_fd, int *client_id)
 {
     S1AP_PDU_t *pdu = NULL;
     asn_dec_rval_t rval;
@@ -82,7 +103,13 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
     }
     if (pdu->present == S1AP_PDU_PR_initiatingMessage) {
     printf("Processing InitiatingMessage\n");
-    process_initating_msg(pdu->choice.initiatingMessage, output_buffer, output_size, NEW_CELL_ID);
+    int client = 0;
+
+
+    printf("Before assignment, *client_id: %d\n", client);
+    process_initating_msg(pdu->choice.initiatingMessage, output_buffer, output_size, NEW_CELL_ID, client_fd, &client);
+    printf("After assignment, *client_id: %d\n", client);
+    *client_id = client;
     } else if (pdu->present == S1AP_PDU_PR_successfulOutcome) {
         printf("Processing SuccessfulOutcome\n");
         process_sucessfullMsg(pdu->choice.successfulOutcome, output_buffer, output_size, NEW_CELL_ID);
@@ -105,7 +132,7 @@ int decode_s1ap_message(const char *input, int input_size, char *output_buffer, 
     return enc_rval.encoded;
 }
 
-void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, int output_size, char *NEW_CELL_ID){
+void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, int output_size, char *NEW_CELL_ID, int client_fd, int *client_id){
     switch (initMsg->value.present) {
         case InitiatingMessage__value_PR_S1SetupRequest: {
             S1SetupRequest_t *setupRequest = &initMsg->value.choice.S1SetupRequest;
@@ -118,7 +145,7 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
             printf("----------------------InitialUEMsg------------------\n");
             InitialUEMessage_t *initialUEMsg = &initMsg->value.choice.InitialUEMessage;
             replace_cell_id(initialUEMsg, output_buffer, output_size, NEW_CELL_ID);
-            replace_enb_ue_id(initialUEMsg, output_buffer, output_size);
+            replace_enb_ue_id(initialUEMsg, output_buffer, output_size, client_fd);
             break;
         }
         case InitiatingMessage__value_PR_UplinkNASTransport: {
@@ -140,6 +167,25 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
             DownlinkNASTransport_t *downLink = &initMsg->value.choice.DownlinkNASTransport;
             //replace_downlink_ue_id(downLink, output_buffer, output_size);
             downlinknasT_ue_id_mapping(downLink, output_buffer, output_size, map);
+            DownlinkNASTransport_IEs_t *ie = downLink->protocolIEs.list.array[1];
+            if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID){
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+                if (ueID)
+                    {                       
+                        int client  = get(packet_store, *ueID);
+                        printf("Cleint ID is: %d\n", client);
+                        printf("Client ID %d\n", *client_id);
+                        *client_id = client;
+                        printf("Client ID %d\n", client_id);
+
+                    }
+                    else
+                    {
+                        printf("ENB UE ID field is not properly initialized.\n");
+                    }
+            }
+
+
             break;
         }
         case InitiatingMessage__value_PR_InitialContextSetupRequest:{
@@ -147,6 +193,23 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
             InitialContextSetupRequest_t *context = &initMsg->value.choice.InitialContextSetupRequest;
             //replace_InitialContextSetup_ue_id(context,  output_buffer, output_size);
             initialContextSetup_ue_id_mapping(context, output_buffer, output_size, map);
+            InitialContextSetupRequestIEs_t *ie = context->protocolIEs.list.array[1];
+            if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID){
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+                if (ueID)
+                    {                       
+                        int client  = get(packet_store, *ueID);
+                        printf("Cleint ID is: %d\n", client);
+                        printf("Client ID %d\n", *client_id);
+                        *client_id = client;
+                        printf("Client ID %d\n", client_id);
+
+                    }
+                    else
+                    {
+                        printf("ENB UE ID field is not properly initialized.\n");
+                    }
+            }
             break;
         }
         case InitiatingMessage__value_PR_UECapabilityInfoIndication:{
@@ -161,12 +224,46 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
             E_RABSetupRequest_t *eRab = &initMsg->value.choice.E_RABSetupRequest;
             //replace_E_RABSetupReq_ue_id(eRab, output_buffer, output_size);
             e_RABSetupReq_ue_id_mapping(eRab, output_buffer, output_size, map);
+            E_RABSetupRequestIEs_t *ie = eRab->protocolIEs.list.array[1];
+            if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID){
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.ENB_UE_S1AP_ID;
+                if (ueID)
+                    {                       
+                        int client  = get(packet_store, *ueID);
+                        printf("Cleint ID is: %d\n", client);
+                        printf("Client ID %d\n", *client_id);
+                        *client_id = client;
+                        printf("Client ID %d\n", client_id);
+
+                    }
+                    else
+                    {
+                        printf("ENB UE ID field is not properly initialized.\n");
+                    }
+            }
             break;
         }
         case InitiatingMessage__value_PR_UEContextReleaseCommand:{
             printf("-------------------UEContextReleaseCommand---------------------\n");
             UEContextReleaseCommand_t *command = &initMsg->value.choice.UEContextReleaseCommand;
             ueContextRelCommand_ue_id_mapping(command, output_buffer, output_size, map);
+            UEContextReleaseCommand_IEs_t *ie = command->protocolIEs.list.array[0];
+            if (ie->id == ProtocolIE_ID_id_UE_S1AP_IDs){
+                ENB_UE_S1AP_ID_t *ueID = &ie->value.choice.UE_S1AP_IDs.choice.uE_S1AP_ID_pair->eNB_UE_S1AP_ID;
+                if (ueID)
+                    {                       
+                        int client  = get(packet_store, *ueID);
+                        printf("Cleint ID is: %d\n", client);
+                        printf("Client ID %d\n", *client_id);
+                        *client_id = client;
+                        printf("Client ID %d\n", client_id);
+
+                    }
+                    else
+                    {
+                        printf("ENB UE ID field is not properly initialized.\n");
+                    }
+            }
             break;
         }
         default:
@@ -365,7 +462,7 @@ u_int32_t increment_enb_s1ap_id()
     return ++NEW_ENB_S1AP_ID;
 }
 
-void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size)
+void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size, int client_fd)
 {
     printf("Starting ENB UE ID Replacement.\n");
 
@@ -383,8 +480,9 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
                 // Replace the ENB UE ID with the new value
                 increment_enb_s1ap_id();
                 insert(map, NEW_ENB_S1AP_ID, *ueID);
+                insert(packet_store, *ueID, client_fd);
+                printf("Get = %d\n", get(packet_store, *ueID));
                 *ueID = NEW_ENB_S1AP_ID;
-                // Format the output message
                 snprintf(output_buffer, output_size, "Replaced ENB UE ID with new value: %u", NEW_ENB_S1AP_ID);
 
                 // Print the confirmation message
@@ -401,11 +499,45 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
     }
 }
 
+void s1ap_setup_unit(int mme_fd){
+    S1AP_PDU_t *pdu = build_s1ap_setup_request(MCC_MNC_BUF, MCC_MNC_LEN, TAC_BUF, TAC_LEN, ENB_NAME);
+    if (!pdu) {
+        fprintf(stderr, "Failed to build S1AP Setup Request\n");
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    // Encode the PDU
+    uint8_t *encoded_buffer = NULL;
+    size_t encoded_size = 0;
+    if (encode_s1ap_pdu(pdu, &encoded_buffer, &encoded_size) != 0) {
+        fprintf(stderr, "Failed to encode S1AP Setup Request\n");
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    // Send the message
+    if (send_s1ap_message(mme_fd, encoded_buffer, encoded_size) != 0) {
+        fprintf(stderr, "Failed to send S1AP Setup Request\n");
+        free(encoded_buffer);
+        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+        close(mme_fd);
+        return EXIT_FAILURE;
+    }
+
+    free(encoded_buffer);
+    ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
+}
 
 void *handle_client(void *arg)
 {
     client_data_t *client_data = (client_data_t *)arg;
     int client_fd = client_data->client_fd;
+    int client_id = 0;
+    struct sockaddr_in client_addrr;
+    client_addrr.sin_addr = client_data->client_addr.address;
+    client_addrr.sin_port = client_data->client_addr.port;
     fd_set read_fds;
     struct timeval timeout;
     char buffer[BUFFER_SIZE];
@@ -413,6 +545,7 @@ void *handle_client(void *arg)
     struct sctp_sndrcvinfo sndrcvinfo;
     int flags;
     char NEW_CELL_ID[4];
+    u_int32_t enb_ue_id = 0;
 
     free(arg); // Free memory allocated for client_data
 
@@ -446,10 +579,14 @@ void *handle_client(void *arg)
                 break;
             }
             buffer[bytes_received] = '\0';
-            printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
-
+            printf("Received from client on stream %d with Association ID %u: %s\n", sndrcvinfo.sinfo_stream, sndrcvinfo.sinfo_assoc_id, buffer);
+            printf("Handling client from %s:%d and the current client ID: %d\n", inet_ntoa(client_addrr.sin_addr), ntohs(client_addrr.sin_port), client_fd);
+            
             // Decode the S1AP message
-            int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
+            
+
+            int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID, client_fd, &client_id);
+            printf("Client ID after decodeing is: %d\n", client_id);
             if (encoded_size < 0)
             {
                 printf("Failed to decode S1AP message. Forwarding original packet to MME.\n");
@@ -492,7 +629,9 @@ void *handle_client(void *arg)
             printf("Received from MME on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
 
             // Decode the S1AP message from MME
-            int re_encoded_size = decode_s1ap_message(buffer, bytes_from_mme, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
+            printf("Client ID before decodeing is: %d\n", &client_id);
+            int re_encoded_size = decode_s1ap_message(buffer, bytes_from_mme, output_buffer, BUFFER_SIZE, NEW_CELL_ID, client_fd, &client_id);
+            printf("Client ID after decodeing is: %d\n", client_id);
             if (re_encoded_size < 0)
             {
                 printf("Failed to decode S1AP message from MME. Forwarding original packet to client.\n");
@@ -502,202 +641,15 @@ void *handle_client(void *arg)
 
             // Forward the packet to the client
             pthread_mutex_lock(&mme_mutex);
-            sctp_sendmsg(client_fd, output_buffer, re_encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
+            sctp_sendmsg(client_id, output_buffer, re_encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
             pthread_mutex_unlock(&mme_mutex);
         }
+    // printf("Stored SCTP PDU Information:\n");
+    // printPdu(pduHead);
     }
 
     close(client_fd); // Close client connection
     return NULL;
-}
-
-
-
-// void *handle_client(void *arg)
-// {
-//     client_data_t *client_data = (client_data_t *)arg;
-//     int client_fd = client_data->client_fd;
-//     char buffer[BUFFER_SIZE];
-//     char output_buffer[BUFFER_SIZE];
-//     struct sctp_sndrcvinfo sndrcvinfo;
-//     int flags;
-//     char NEW_CELL_ID[4];
-
-//     free(arg); // Free memory allocated for client_data
-
-//     while (1)
-//     {
-//         // Receive data from the client
-//         int bytes_received = sctp_recvmsg(client_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-//         if (bytes_received <= 0)
-//         {
-//             printf("Client disconnected or error occurred. Closing connection.\n");
-//             break;
-//         }
-
-//         buffer[bytes_received] = '\0';
-//         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
-
-//         // Decode the S1AP message
-//         int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
-//         if (encoded_size < 0)
-//         {
-//             printf("Failed to decode S1AP message. Forwarding original packet to MME.\n");
-//             memcpy(output_buffer, buffer, bytes_received);
-//             encoded_size = bytes_received;
-//         }
-
-//         // Forward the packet to the MME
-//         pthread_mutex_lock(&mme_mutex);
-//         sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         pthread_mutex_unlock(&mme_mutex);
-
-//         // Receive response from the MME
-//         int bytes_from_mme = sctp_recvmsg(mme_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-//         if (bytes_from_mme <= 0)
-//         {
-//             printf("MME disconnected or error occurred. Closing connection.\n");
-//             break;
-//         }
-
-//         buffer[bytes_from_mme] = '\0';
-//         printf("Received from MME on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
-
-//         // Decode the S1AP message from MME
-//         int re_encoded_size = decode_s1ap_message(buffer, bytes_from_mme, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
-//         if (re_encoded_size < 0)
-//         {
-//             printf("Failed to decode S1AP message from MME. Forwarding original packet to client.\n");
-//             memcpy(output_buffer, buffer, bytes_from_mme);
-//             re_encoded_size = bytes_from_mme;
-//         }
-
-//         // Forward the packet to the client
-//         pthread_mutex_lock(&mme_mutex);
-//         sctp_sendmsg(client_fd, output_buffer, re_encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         pthread_mutex_unlock(&mme_mutex);
-//     }
-
-//     close(client_fd); // Close client connection
-//     return NULL;
-// }
-
-
-// void *handle_client(void *arg)
-// {
-//     client_data_t *client_data = (client_data_t *)arg;
-//     int client_fd = client_data->client_fd;
-//     char buffer[BUFFER_SIZE];
-//     char output_buffer[BUFFER_SIZE];
-//     struct sctp_sndrcvinfo sndrcvinfo;
-//     int flags;
-//     char NEW_CELL_ID[4];
-//     // uint32_t NEW_ENB_UE_ID;
-
-//     free(arg); // Free memory allocated for client_data
-
-//     while (1)
-//     {
-//         // Receive data from the client, including SCTP metadata
-//         int bytes_received = sctp_recvmsg(client_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-//         if (bytes_received <= 0)
-//         {
-//             printf("Client disconnected or error occurred. Closing connection.\n");
-//             break;
-//         }
-//         buffer[bytes_received] = '\0';
-//         printf("Received from client on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
-
-//         // Decode and optionally modify the S1AP message
-//         int encoded_size = decode_s1ap_message(buffer, bytes_received, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
-
-//         // Forward the packet to the MME
-//         pthread_mutex_lock(&mme_mutex);
-//         if (encoded_size > 0)
-//         {
-//             // Send the modified packet
-//             printf("Modified S1AP message successfully.\n");
-//             uint32_t value = get(map, NEW_ENB_ID);
-//             printf("Old EnbID: %X\n", value);
-
-//             uint32_t oldValue = get(map, NEW_CELL_ID);
-//             printf("Old Cell ID stored in map: 0x%X\n", oldValue);
-
-//             uint32_t ueValue = get(map, NEW_ENB_S1AP_ID);
-//             printf("Old ENB UE ID: %u\n", ueValue);
-//             sctp_sendmsg(mme_fd, output_buffer, encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         }
-//         else
-//         {
-//             // Send the unmodified packet
-//             printf("No modifications made. Forwarding the original packet to MME.\n");
-//             sctp_sendmsg(mme_fd, buffer, bytes_received, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         }
-//         pthread_mutex_unlock(&mme_mutex);
-
-//         // Receive response from the MME
-//         int bytes_from_mme = sctp_recvmsg(mme_fd, buffer, BUFFER_SIZE, NULL, 0, &sndrcvinfo, &flags);
-//         if (bytes_from_mme <= 0)
-//         {
-//             printf("MME disconnected or error occurred. Closing connection.\n");
-//             break;
-//         }
-
-//         buffer[bytes_from_mme] = '\0';
-//         printf("Received from MME on stream %d: %s\n", sndrcvinfo.sinfo_stream, buffer);
-
-//         int re_encoded_size = decode_s1ap_message(buffer, bytes_from_mme, output_buffer, BUFFER_SIZE, NEW_CELL_ID);
-
-//         pthread_mutex_lock(&mme_mutex);
-//         if (re_encoded_size > 0)
-//         {
-//             // Send the modified packet
-//             printf("Modified incoming MME S1AP message successfully.\n");
-//             sctp_sendmsg(client_fd, output_buffer, re_encoded_size, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         }
-//         else
-//         {
-//             // Send the unmodified packet
-//             printf("No modifications made. Forwarding the original packet to Client.\n");
-//             sctp_sendmsg(client_fd, buffer, bytes_from_mme, NULL, 0, 0, 0, sndrcvinfo.sinfo_stream, 0, 0);
-//         }
-//         pthread_mutex_unlock(&mme_mutex);
-//     }
-
-//     close(client_fd); // Close client connection
-//     return NULL;
-// }
-
-
-void s1ap_setup_unit(int mme_fd){
-    S1AP_PDU_t *pdu = build_s1ap_setup_request(MCC_MNC_BUF, MCC_MNC_LEN, TAC_BUF, TAC_LEN, ENB_NAME);
-    if (!pdu) {
-        fprintf(stderr, "Failed to build S1AP Setup Request\n");
-        close(mme_fd);
-        return EXIT_FAILURE;
-    }
-
-    // Encode the PDU
-    uint8_t *encoded_buffer = NULL;
-    size_t encoded_size = 0;
-    if (encode_s1ap_pdu(pdu, &encoded_buffer, &encoded_size) != 0) {
-        fprintf(stderr, "Failed to encode S1AP Setup Request\n");
-        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
-        close(mme_fd);
-        return EXIT_FAILURE;
-    }
-
-    // Send the message
-    if (send_s1ap_message(mme_fd, encoded_buffer, encoded_size) != 0) {
-        fprintf(stderr, "Failed to send S1AP Setup Request\n");
-        free(encoded_buffer);
-        ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
-        close(mme_fd);
-        return EXIT_FAILURE;
-    }
-
-    free(encoded_buffer);
-    ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
 }
 
 int main()
@@ -707,6 +659,10 @@ int main()
     socklen_t addr_len = sizeof(client_addr);
     pthread_t thread_id;
     map = createHashMap(10);
+    packet_store = createHashMap(10);
+
+    
+    //assoc_map = create_assoc_map();
 
     // Connect to the MME server
     mme_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
@@ -725,6 +681,7 @@ int main()
         close(mme_fd);
         exit(EXIT_FAILURE);
     }
+    
 
     if (connect(mme_fd, (struct sockaddr *)&mme_addr, sizeof(mme_addr)) < 0)
     {
@@ -732,6 +689,7 @@ int main()
         close(mme_fd);
         exit(EXIT_FAILURE);
     }
+   
 
     printf("Connected to MME at %s:%d\n", MME_ADDRESS, MME_PORT);
     //send s1setup request
@@ -741,6 +699,8 @@ int main()
 
     // Set up SCTP server for client connections
     server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+    //server_fd = socket(AF_INET, SOCK_SEQPACKET, IPPROTO_SCTP);
+    
     if (server_fd < 0)
     {
         perror("Client socket creation failed");
@@ -781,6 +741,7 @@ int main()
     while (1)
     {
         client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
+        
         if (client_fd < 0)
         {
             perror("Accept failed");
@@ -790,10 +751,23 @@ int main()
         printf("New client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
-        int *client_fd_ptr = malloc(sizeof(int));
-        *client_fd_ptr = client_fd;
+        // int *client_fd_ptr = malloc(sizeof(int));
+        // *client_fd_ptr = client_fd;
 
-        if (pthread_create(&thread_id, NULL, handle_client, client_fd_ptr) != 0)
+        client_data_t *client_data = malloc(sizeof(client_data_t));
+        if (client_data == NULL)
+        {
+            perror("Failed to allocate memory for client data");
+            close(client_fd);
+            continue;
+        }
+
+        client_data->client_fd = client_fd;
+        client_data->client_addr.address = client_addr.sin_addr;
+        client_data->client_addr.port = client_addr.sin_port;
+        
+
+        if (pthread_create(&thread_id, NULL, handle_client, client_data) != 0)
         {
             perror("Thread creation failed");
             close(client_fd);
@@ -803,7 +777,7 @@ int main()
             pthread_detach(thread_id); // Detach thread for automatic cleanup
         }
     }
-
+    //cleanup_assoc_map(assoc_map);
     close(server_fd);
     close(mme_fd);
     free(map->buckets);
