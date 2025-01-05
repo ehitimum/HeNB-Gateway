@@ -1,34 +1,10 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/select.h>
-#include <netinet/sctp.h>
-
-#include "S1AP-PDU.h"
-#include "s1ap-modifier.h"
-#include "s1ap-handler.h"
-#include "InitiatingMessage.h"
-#include "asn_application.h"
-#include "asn_codecs.h"
-#include "Global-ENB-ID.h"
-#include "ProtocolIE-Field.h"
-#include "S1SetupRequest.h"
-#include "hashmap.h"
-#include "SuccessfulOutcome.h"
-//#include "sctp-pdu-list.h"
-//#include "sctp-mapper.h"
+#include "henb-gw.h"
 
 #define CLIENT_PORT 36412 // Port for clients to connect
 #define MME_PORT 36412    // Port to connect to MME
 #define MME_ADDRESS "192.168.220.9"
 #define BUFFER_SIZE 9999
 #define MAX_CLIENTS 10
-
 #define MCC_MNC_BUF "\x00\xF1\x10" // MCC=001, MNC=01
 #define MCC_MNC_LEN 3
 #define TAC_BUF "\x00\x01"
@@ -44,22 +20,15 @@ int mme_fd; // Global MME connection (shared by threads, can be thread-safe with
 pthread_mutex_t mme_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 HashMap *map = NULL;
-//assoc_map_t *assoc_map = NULL;
-//Nexus_Sctp_t* pduHead = NULL;
-
-// const char NEW_ENB_ID[10]; //= {0x00, 0x12, 0x34};
 int decimal = 107021;
 char NEW_ENB_ID[10];
 u_int32_t NEW_ENB_S1AP_ID = 0;
 
 pthread_mutex_t pdu_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-// Assume pdu_buffer and its size are defined globally or passed appropriately
-//char pdu_buffer[BUFFER_SIZE];
 size_t pdu_length = 0;
 uint8_t *pdu_buffer = NULL;
 int check = 0;
-
+HashMap *packet_store;
 
 
 void decimalToHex(int decimal, char *hexStr)
@@ -68,24 +37,9 @@ void decimalToHex(int decimal, char *hexStr)
     sprintf(hexStr, "0x%X", decimal);
 }
 
-typedef struct
-{
-    int client_fd;
-    struct {
-        in_port_t port;
-        struct in_addr address;
-    } client_addr;
-    char s1ap_info_buffer[BUFFER_SIZE];
-} client_data_t;
 
 
-pthread_mutex_t packet_store_mutex = PTHREAD_MUTEX_INITIALIZER;
-typedef struct {
-    int client_fd;
-    u_int32_t enb_ue_s1ap_id;
-} sctp_packet_info_t;
 
-HashMap *packet_store;
 
 
 
@@ -264,6 +218,12 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
                         printf("ENB UE ID field is not properly initialized.\n");
                     }
             }
+            break;
+        }
+        case InitiatingMessage__value_PR_HandoverRequired:{
+            printf("-------------------HandoverRequired---------------------\n");
+            HandoverRequired_t *handover = &initMsg->value.choice.HandoverRequired;
+            handOverRequired_ue_id_mapping(handover, output_buffer, output_size, map);
             break;
         }
         default:
