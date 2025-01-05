@@ -1,0 +1,12 @@
+client_port: 36412
+mme_port: 36412
+mme_address: "192.168.220.10"
+buffer_size: 9999
+max_clients: 10
+
+network_info:
+  mcc_mnc_buf: 00101
+  mcc_mnc_len: 3
+  tac_buf: 01
+  tac_len: 2
+  enb_name: "Henb-Proxy"
