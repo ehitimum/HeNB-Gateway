@@ -27,5 +27,6 @@ void uplinknasT_cell_id_mapping(UplinkNASTransport_t *uplink, char *output_buffe
 u_int32_t increment_enb_s1ap_id();
 void initialUeMsg_enb_ue_id_mapping(InitialUEMessage_t *initialUEMsg, char *output_buffer, int output_size, HashMap *map, char *NEW_ENB_S1AP_ID);
 void uplinknasT_enb_ue_id_mapping(UplinkNASTransport_t *uplink, char *output_buffer, int output_size, HashMap *map);
+void handOverRequired_ue_id_mapping(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map);
 
 #endif

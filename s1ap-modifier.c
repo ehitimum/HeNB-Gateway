@@ -114,6 +114,11 @@ void ueContextRelCommand_ue_id_mapping(UEContextReleaseCommand_t *command, char 
     }
 }
 
+void handOverRequired_ue_id_mapping(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map){
+    HandoverRequiredIEs_t *ie = handover->protocolIEs.list.array[1];
+    if (ie->id == ProtocolIE_ID_id_eNB_UE_S1AP_ID) map_new_ue_id(&ie->value.choice.ENB_UE_S1AP_ID, output_buffer, output_size, map);
+}
+
 
 
 
