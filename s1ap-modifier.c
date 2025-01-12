@@ -120,33 +120,35 @@ void handOverRequired_ue_id_mapping(HandoverRequired_t *handover, char *output_b
 }
 
 void modify_target_id(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map){
+    printf("Pass\n");
     HandoverRequiredIEs_t *ie = handover->protocolIEs.list.array[4];
-    printf("Pass 1");
+    printf("Pass 1\n");
     if (ie->id == ProtocolIE_ID_id_TargetID){
         if (!ie->value.choice.TargetID.choice.targeteNB_ID) {
                 snprintf(output_buffer, output_size, "TargetID is not properly initialized.\n");
                 printf("%s", output_buffer);
         }
-        printf("Pass 2");
+        printf("Pass 2\n");
         TargeteNB_ID_t *enbID = &ie->value.choice.TargetID.choice.targeteNB_ID->global_ENB_ID;
             if (enbID->global_ENB_ID.eNB_ID.present == ENB_ID_PR_macroENB_ID) {
-                printf("Pass 3");
+                printf("Pass 3\n");
                 if (enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.size >= 3) {
-                    const uint8_t *newBuffer = get(map, 1);
-                    printf("Pass 4");
-                    if (!newBuffer) {
-                        snprintf(output_buffer, output_size, "get(map, 1) returned null.\n");
-                        printf("%s", output_buffer);
-                        return;
-                    }
-                    memcpy(enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf, newBuffer, 3);
-                    printf("Pass 5");
+                    uint32_t *newBuffer = get(map, 1);
+                    printf("Pass 4: %X\n", newBuffer);
+                    // if (!newBuffer) {
+                    //     snprintf(output_buffer, output_size, "get(map, 1) returned null.\n");
+                    //     printf("%s", output_buffer);
+                    //     return;
+                    // }
+                    printf("EnbID buff: %X", enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf);
+                    memcpy(enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf, newBuffer, sizeof(newBuffer));
+                    printf("Pass 5\n");
                     snprintf(output_buffer, output_size, "Replaced Target eNB-ID with new value: 0x%02X%02X%02X\n",
                              enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[0],
                              enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[1],
                              enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[2]);
                     printf("%s", output_buffer);
-                    printf("Pass 6");
+                    printf("Pass 6\n");
                 } else {
                     snprintf(output_buffer, output_size, "Buffer size for macroENB_ID is insufficient.\n");
                     printf("%s", output_buffer);

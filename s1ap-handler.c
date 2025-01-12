@@ -27,6 +27,17 @@ int BIT_STRING_fromBuf(BIT_STRING_t *bit_str, const uint8_t *buf, size_t bit_len
     return 0;
 }
 
+void decimalToHexadecimal(int decimal, char *hexStr)
+{
+    // Use sprintf to convert decimal to hexadecimal
+    sprintf(hexStr, "%X", decimal);
+}
+
+void decimalToASCII(int decimal, char *asciiStr) {
+    // Use sprintf to convert decimal to its ASCII string representation
+    sprintf(asciiStr, "%d", decimal);
+}
+
 // Build Global-ENB-ID IE
 static S1SetupRequestIEs_t *build_global_enb_id_ie(char *MCC_MNC_BUF, int MCC_MNC_LEN, HashMap *map) {
     S1SetupRequestIEs_t *ie_global_enb_id = calloc(1, sizeof(S1SetupRequestIEs_t));
@@ -51,14 +62,26 @@ static S1SetupRequestIEs_t *build_global_enb_id_ie(char *MCC_MNC_BUF, int MCC_MN
     // Example eNB ID (20-bit)
     global_enb_id->eNB_ID.present = ENB_ID_PR_macroENB_ID;
 
-    uint8_t enb_id_data[] = { 0xAA, 0xBC, 0x6E };
+    uint32_t enb_id_data[] = { 0xAA, 0xBC, 0x6E };
+    int decimal_enbId = 104050;
+    char hex_enb_id[10];
+    decimalToHexadecimal(decimal_enbId, hex_enb_id);
 
-    if (BIT_STRING_fromBuf(&global_enb_id->eNB_ID.choice.macroENB_ID, enb_id_data, 20) != 0) {
+    //uint32_t enb_id_packed = 0; 
+    //enb_id_packed = (enb_id_data[0] << 16) | (enb_id_data[1] << 8) | enb_id_data[2];
+    //printf("Packed enb ID is: %u (0x%X)\n", enb_id_packed, enb_id_packed);
+    printf("ENB ID: 0x%X and %u\n", hex_enb_id, hex_enb_id);
+    if (BIT_STRING_fromBuf(&global_enb_id->eNB_ID.choice.macroENB_ID, hex_enb_id, 20) != 0) {
         perror("BIT_STRING_fromBuf failed");
         free(ie_global_enb_id);
         return NULL;
     }
-    insert(map, 1, enb_id_data);
+    insert(map, 1,  *(uint32_t *)global_enb_id->eNB_ID.choice.macroENB_ID.buf);
+    //insert(map, 1, enb_id_packed);
+    //printf("Stored enb ID is: %X\n", get(map, 1));
+    uint32_t retrieved_enb_id = get(map, 1);
+    printf("Retrieved enb ID is: %X\n", retrieved_enb_id);
+
     return ie_global_enb_id;
 }
 
