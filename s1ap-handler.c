@@ -28,7 +28,7 @@ int BIT_STRING_fromBuf(BIT_STRING_t *bit_str, const uint8_t *buf, size_t bit_len
 }
 
 // Build Global-ENB-ID IE
-static S1SetupRequestIEs_t *build_global_enb_id_ie(char *MCC_MNC_BUF, int MCC_MNC_LEN) {
+static S1SetupRequestIEs_t *build_global_enb_id_ie(char *MCC_MNC_BUF, int MCC_MNC_LEN, HashMap *map) {
     S1SetupRequestIEs_t *ie_global_enb_id = calloc(1, sizeof(S1SetupRequestIEs_t));
     if (!ie_global_enb_id) {
         perror("calloc failed");
@@ -50,12 +50,15 @@ static S1SetupRequestIEs_t *build_global_enb_id_ie(char *MCC_MNC_BUF, int MCC_MN
 
     // Example eNB ID (20-bit)
     global_enb_id->eNB_ID.present = ENB_ID_PR_macroENB_ID;
-    if (BIT_STRING_fromBuf(&global_enb_id->eNB_ID.choice.macroENB_ID, (uint8_t *)"\xAA\xBC\x6E", 20) != 0) {
+
+    uint8_t enb_id_data[] = { 0xAA, 0xBC, 0x6E };
+
+    if (BIT_STRING_fromBuf(&global_enb_id->eNB_ID.choice.macroENB_ID, enb_id_data, 20) != 0) {
         perror("BIT_STRING_fromBuf failed");
         free(ie_global_enb_id);
         return NULL;
     }
-
+    insert(map, 1, enb_id_data);
     return ie_global_enb_id;
 }
 
@@ -145,7 +148,7 @@ static S1SetupRequestIEs_t *build_enb_name_ie(char *ENB_NAME){
 }
 
 // Build the entire S1SetupRequest PDU
-S1AP_PDU_t *build_s1ap_setup_request(char *MCC_MNC_BUF, int MCC_MNC_LEN, char *TAC_BUF, int TAC_LEN, char *ENB_NAME) {
+S1AP_PDU_t *build_s1ap_setup_request(char *MCC_MNC_BUF, int MCC_MNC_LEN, char *TAC_BUF, int TAC_LEN, char *ENB_NAME, HashMap *map) {
     S1AP_PDU_t *pdu = calloc(1, sizeof(S1AP_PDU_t));
     if (!pdu) {
         perror("calloc failed");
@@ -168,7 +171,7 @@ S1AP_PDU_t *build_s1ap_setup_request(char *MCC_MNC_BUF, int MCC_MNC_LEN, char *T
     S1SetupRequest_t *setup_request = &init_msg->value.choice.S1SetupRequest;
 
     // Add Global ENB ID IE
-    S1SetupRequestIEs_t *ie_global_enb_id = build_global_enb_id_ie(MCC_MNC_BUF, MCC_MNC_LEN);
+    S1SetupRequestIEs_t *ie_global_enb_id = build_global_enb_id_ie(MCC_MNC_BUF, MCC_MNC_LEN, map);
     if (!ie_global_enb_id) {
         ASN_STRUCT_FREE(asn_DEF_S1AP_PDU, pdu);
         return NULL;

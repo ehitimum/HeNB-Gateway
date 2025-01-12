@@ -29,6 +29,7 @@ size_t pdu_length = 0;
 uint8_t *pdu_buffer = NULL;
 int check = 0;
 HashMap *packet_store;
+HashMap *enbMap;
 
 
 void decimalToHex(int decimal, char *hexStr)
@@ -223,7 +224,8 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
         case InitiatingMessage__value_PR_HandoverRequired:{
             printf("-------------------HandoverRequired---------------------\n");
             HandoverRequired_t *handover = &initMsg->value.choice.HandoverRequired;
-            handOverRequired_ue_id_mapping(handover, output_buffer, output_size, map);
+            //handOverRequired_ue_id_mapping(handover, output_buffer, output_size, map);
+            modify_target_id(handover,  output_buffer, output_size, enbMap);
             break;
         }
         default:
@@ -460,7 +462,7 @@ void replace_enb_ue_id(InitialUEMessage_t *initialUEMsg, char *output_buffer, in
 }
 
 void s1ap_setup_unit(int mme_fd){
-    S1AP_PDU_t *pdu = build_s1ap_setup_request(MCC_MNC_BUF, MCC_MNC_LEN, TAC_BUF, TAC_LEN, ENB_NAME);
+    S1AP_PDU_t *pdu = build_s1ap_setup_request(MCC_MNC_BUF, MCC_MNC_LEN, TAC_BUF, TAC_LEN, ENB_NAME, enbMap);
     if (!pdu) {
         fprintf(stderr, "Failed to build S1AP Setup Request\n");
         close(mme_fd);
@@ -620,6 +622,7 @@ int main()
     pthread_t thread_id;
     map = createHashMap(10);
     packet_store = createHashMap(10);
+    enbMap = createHashMap(10);
 
     
     //assoc_map = create_assoc_map();
