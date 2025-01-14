@@ -29,5 +29,6 @@ void initialUeMsg_enb_ue_id_mapping(InitialUEMessage_t *initialUEMsg, char *outp
 void uplinknasT_enb_ue_id_mapping(UplinkNASTransport_t *uplink, char *output_buffer, int output_size, HashMap *map);
 void handOverRequired_ue_id_mapping(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map);
 void modify_target_id(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map);
+void tagret_modification(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map);
 
 #endif

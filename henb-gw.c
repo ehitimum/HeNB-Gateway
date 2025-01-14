@@ -225,7 +225,7 @@ void process_initating_msg(InitiatingMessage_t *initMsg, char *output_buffer, in
             printf("-------------------HandoverRequired---------------------\n");
             HandoverRequired_t *handover = &initMsg->value.choice.HandoverRequired;
             //handOverRequired_ue_id_mapping(handover, output_buffer, output_size, map);
-            modify_target_id(handover,  output_buffer, output_size, enbMap);
+            tagret_modification(handover,  output_buffer, output_size, enbMap);
             break;
         }
         default:
@@ -745,5 +745,9 @@ int main()
     close(mme_fd);
     free(map->buckets);
     free(map);
+    free(packet_store->buckets);
+    free(packet_store);
+    free(enbMap->buckets);
+    free(enbMap);
     return 0;
 }

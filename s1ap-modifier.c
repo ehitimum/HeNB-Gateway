@@ -131,33 +131,66 @@ void modify_target_id(HandoverRequired_t *handover, char *output_buffer, int out
         printf("Pass 2\n");
         TargeteNB_ID_t *enbID = &ie->value.choice.TargetID.choice.targeteNB_ID->global_ENB_ID;
             if (enbID->global_ENB_ID.eNB_ID.present == ENB_ID_PR_macroENB_ID) {
-                printf("Pass 3\n");
-                if (enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.size >= 3) {
-                    uint32_t *newBuffer = get(map, 1);
-                    printf("Pass 4: %X\n", newBuffer);
-                    // if (!newBuffer) {
-                    //     snprintf(output_buffer, output_size, "get(map, 1) returned null.\n");
-                    //     printf("%s", output_buffer);
-                    //     return;
-                    // }
-                    printf("EnbID buff: %X", enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf);
-                    memcpy(enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf, newBuffer, sizeof(newBuffer));
-                    printf("Pass 5\n");
-                    snprintf(output_buffer, output_size, "Replaced Target eNB-ID with new value: 0x%02X%02X%02X\n",
-                             enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[0],
-                             enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[1],
-                             enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[2]);
+            printf("Pass 3\n");
+            if (!enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf) {
+                enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf = malloc(3);
+                if (!enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf) {
+                    snprintf(output_buffer, output_size, "Memory allocation failed for macroENB_ID buffer.\n");
                     printf("%s", output_buffer);
-                    printf("Pass 6\n");
-                } else {
-                    snprintf(output_buffer, output_size, "Buffer size for macroENB_ID is insufficient.\n");
-                    printf("%s", output_buffer);
+                    return;
                 }
-            } else {
-                snprintf(output_buffer, output_size, "Unsupported eNB_ID type.\n");
-                printf("%s", output_buffer);
+                enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.size = 3;
             }
-
+            uint32_t *newBuffer = get(map, 1);
+            printf("Pass 4: %X\n", newBuffer);
+            if (!newBuffer) {
+                snprintf(output_buffer, output_size, "get(map, 1) returned null.\n");
+                printf("%s", output_buffer);
+                return;
+            }
+            memcpy(enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf, newBuffer, 3);
+            snprintf(output_buffer, output_size, "Replaced Target eNB-ID with new value: 0x%02X%02X%02X\n",
+                    enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[0],
+                    enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[1],
+                    enbID->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf[2]);
+            printf("%s", output_buffer);
+        } else {
+            snprintf(output_buffer, output_size, "Unsupported eNB_ID type.\n");
+            printf("%s", output_buffer);
+        }
     }
 
+}
+
+void tagret_modification(HandoverRequired_t *handover, char *output_buffer, int output_size, HashMap *map){
+    printf("Pass 1\n");
+    HandoverRequiredIEs_t *ie = handover->protocolIEs.list.array[4];
+    printf("Pass 2\n");
+    if(ie->id == ProtocolIE_ID_id_TargetID){
+        printf("Pass 3\n");
+        TargeteNB_ID_t *target = &ie->value.choice.TargetID.choice.targeteNB_ID->global_ENB_ID;
+        
+        printf("Pass 4\n");
+
+        if (target->global_ENB_ID.eNB_ID.present == ENB_ID_PR_macroENB_ID)
+        {
+            //ENB_ID_t *enbID = &enbIDs->eNB_ID.choice.macroENB_ID;
+            //Global_ENB_ID_t *enbID = &target->global_ENB_ID.eNB_ID.choice.macroENB_ID;
+            //Global_ENB_ID_t *enbID_home = &target->global_ENB_ID.eNB_ID.choice.homeENB_ID;
+            ENB_ID_t *enbID = &target->global_ENB_ID.eNB_ID.choice.macroENB_ID;
+            ENB_ID_t *enbID_home = &target->global_ENB_ID.eNB_ID.choice.homeENB_ID;
+            uint32_t newBuffer = get(map, 1);
+            printf("Pass 5: %X\n", newBuffer);
+            printf("Pass 5.5, Global Enb ID: %X\n", target->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf);
+            printf("Pass 5.1, Home Enb ID: %u\n", target->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf);
+            printf("Macro Size: %d\n", target->global_ENB_ID.eNB_ID.choice.macroENB_ID.size);
+            printf("New buffer size: %d\n", sizeof(newBuffer));
+            memcpy(target->global_ENB_ID.eNB_ID.choice.macroENB_ID.buf, newBuffer, 3);
+            printf("Pass 6\n");
+        }
+        else{
+            printf("Not macroENB_ID\n");
+        }
+        
+    }
 }
